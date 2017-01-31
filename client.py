@@ -19,85 +19,101 @@ class Client:
 
 	PRODUCE_REQUEST = 0
 
-	# RequestMessage => ApiKey ApiVersion CorrelationId ClientId	
-	def header(self, apiKey, apiVersion, correlationId, clientId):
-		buff = self._int16(apiKey) 
-		buff += self._int16(apiVersion) 
-		buff += self._int32(correlationId) 
-		buff += self._string(clientId)
+	def requestOrResponse(self, message):
+		requestOrResponse = [
+			self._size(message),
+			message
+		]
 
-		return buff
+		return ''.join(requestOrResponse)
+
+	# RequestMessage => ApiKey ApiVersion CorrelationId ClientId RequestMessage	
+	def requestMessage(self, apiKey, apiVersion, correlationId, clientId, requestMessage):
+		requestMessage = [
+			self._int16(apiKey), 
+			self._int16(apiVersion), 
+			self._int32(correlationId), 
+			self._string(clientId),
+			requestMessage
+		]
+
+		return ''.join(requestMessage)
 
 
 	# MessageSet => [Offset MessageSize Message]
 	# MessageSets are not preceded by an int32 like other array elements in the protocol
 	def messageSet(self, messages):
-
-		messageSet = ''
+		messageSet = []
 		for message in messages:
-			messageBuff = self.message(message['timestamp'], message['key'], message['value'])
+			msgContent = self.message(message['timestamp'], message['key'], message['value'])
 
-			messageSet += self._int64(message['offset'])
-			messageSet += self._size(messageBuff)
-			messageSet += messageBuff
+			message = [
+				self._int64(message['offset']),
+				self._size(msgContent),
+				msgContent
+			]
 
-		return messageSet
+			messageSet.append(''.join(message))
+
+		return ''.join(messageSet)
 
 
 	# Message => Crc MagicByte Attributes Key Value
 	def message(self, timestamp, key, value):
+		message = [
+			self._int8(self.MAGIC_BYTE),
+			#@TODO attributes: compression and timestamp type, all bits set to 0 for now
+			self._int8(0),
+			self._int64(timestamp),
+			self._bytes(key),
+			self._bytes(value)
+		]
 
-		message = self._int8(self.MAGIC_BYTE)
-		#@TODO attributes: compression and timestamp type, all bits set to 0 for now
-		message += self._int8(0)
-		message += self._int64(timestamp)
-		message += self._bytes(key)
-		message += self._bytes(value)
+		crc = zlib.crc32(''.join(message))
 
-		crc = zlib.crc32(message)
-
-		message = self._int32(crc) + message		
-
-		return message
+		return self._int32(crc) + ''.join(message)
+		
 
 	# ProduceRequest => RequiredAcks Timeout [TopicName [Partition MessageSetSize MessageSet]]
 	# For now produce can be made only on one topic and one partition at a time 
 	# @TODO to be refactored to fit protocol
 	def produceRequest(self, requiredAcks, timeout, topicName, partition, messageSet):
+		produceRequest = [
+			self._int16(requiredAcks),
+			self._int32(timeout),
+			# encode topic array
+			self._int32(1),
+			self._string(topicName),
+			# encode partitions array
+			self._int32(1),
+			self._int32(partition),
 
-		header = self.header(self.PRODUCE_REQUEST, self.API_VERSION, 0, self.CLIENT_ID)
+			self._size(messageSet),
+			messageSet
+		]
 
-		buff = self._int16(requiredAcks) 
-		buff += self._int32(timeout) 
+		return ''.join(produceRequest)
 
-		# encode topic array
-		buff += self._int32(1)
-		buff += self._string(topicName)
+		request = [
+			self.requestMessage(self.PRODUCE_REQUEST, self.API_VERSION, 0, self.CLIENT_ID),
+			''.join(produceRequest)
+		]
 
-		# encode partitions array
-		buff += self._int32(1)
-		buff += self._int32(partition)
-
-		buff += self._size(messageSet)
-		buff += messageSet
-
-
-		produceRequest = self._size(header + buff)
-		produceRequest +=  header + buff
-
-		return produceRequest
+		return self._size(''.join(request)) + ''.join(request)
 
 
 	# bytes type as defined in kafka protocol
 	# string size N as a signed int16 stored in big endian followed by N bytes   
 	def _bytes(self, string):
-		return struct.pack('>l', len(string)) + string 
+		length = len(string)
+		return struct.pack('>l%dc' % (length), length, *string) 
 
 
 	# string type as defined in kafka protocol
 	# string size N as a signed int32 stored in big endian followed by N bytes 
 	def _string(self, string):
-		return struct.pack('>h', len(string)) + string 
+		length = len(string)
+		return struct.pack('>h%dc' % (length), length, *string)
 
 
 	def _size(self, buff):
@@ -142,13 +158,15 @@ messages = [{
 }]
 
 messageSet = client.messageSet(messages)
-buff = client.produceRequest(1, 1000, 'live2', 1, messageSet)		
-printHex(buff)
+produceRequest = client.produceRequest(1, 1000, 'live2', 1, messageSet)
+requestMessage = client.requestMessage(client.PRODUCE_REQUEST, client.API_VERSION, 0, client.CLIENT_ID, produceRequest)
+request = client.requestOrResponse(requestMessage)
 
+printHex(request)
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect(('192.168.33.33', 9092))
-s.send(buff)
+s.send(request)
 
 response = s.recv(1024)
  
