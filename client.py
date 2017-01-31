@@ -70,9 +70,8 @@ class Client:
 		]
 
 		crc = zlib.crc32(''.join(message))
-
 		return self._int32(crc) + ''.join(message)
-		
+
 
 	# ProduceRequest => RequiredAcks Timeout [TopicName [Partition MessageSetSize MessageSet]]
 	# For now produce can be made only on one topic and one partition at a time 
@@ -93,14 +92,6 @@ class Client:
 		]
 
 		return ''.join(produceRequest)
-
-		request = [
-			self.requestMessage(self.PRODUCE_REQUEST, self.API_VERSION, 0, self.CLIENT_ID),
-			''.join(produceRequest)
-		]
-
-		return self._size(''.join(request)) + ''.join(request)
-
 
 	# bytes type as defined in kafka protocol
 	# string size N as a signed int16 stored in big endian followed by N bytes   
